@@ -5,5 +5,7 @@ ConditionPathExists=/usr/bin/addrwatch
 [Service]
 EnvironmentFile=/etc/default/addrwatch
 ExecStart=/usr/bin/addrwatch --daemon --output $STATEFILE --pid /var/run/addrwatch.pid --ratelimit $RATELIMIT $OPTS $INTERFACES
+ExecReload=kill -HUP $MAINPID
 PIDFile=/var/run/addrwatch.pid
 Type=forking
+Restart=on-failure
