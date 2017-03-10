@@ -9,6 +9,7 @@
 
 #define IP4_LEN	4
 #define IP6_LEN 16
+#define MAC_LEN 6
 
 const char *pkt_origin_str[] = {
 	"ARP_REQ",
@@ -41,7 +42,20 @@ void blacklist_add(char *ip_str)
 		cfg.blacklist = ip;
 		return;
 	}
-
+	
+	int values[6];
+	int i;
+	
+	rc = sscanf(ip_str, "%x:%x:%x:%x:%x:%x", &values[0], &values[1], &values[2], &values[3], &values[4], &values[5]);
+	if (rc == 6) {
+		for( i = 0; i < 6; ++i )
+			ip->ip_addr[i] = (uint8_t) values[i];
+		ip->addr_len = MAC_LEN;
+		ip->next = cfg.blacklist;
+		cfg.blacklist = ip;
+		return;
+	}
+	
 	free(ip);
 	log_msg(LOG_ERR, "Unable to blacklist, '%s' is not a valid IPv4 or IPv6 address", ip_str);
 }
@@ -101,6 +115,10 @@ void save_pairing(struct pkt *p)
 	uint16_t hash;
 
 	if (blacklist_match(p->ip_addr, p->ip_len))
+		return;
+
+	 // check mac address
+	 if (blacklist_match(p->l2_addr, MAC_LEN))
 		return;
 
 	tstamp = p->pcap_header->ts.tv_sec;
