@@ -36,10 +36,16 @@ void output_mysql_init()
 	int rc;
 	char    create_query[sizeof(mysql_create_template) +64];
 	char    insert_query[sizeof(mysql_insert_template) +64];
+	int     facility = LOG_ERR;
+	my_bool reconnect = 1;
 
 	if (!cfg.mysql_flag)
 		return;
 
+	if (reconnect == 1) {
+		facility = LOG_WARNING;
+	}
+	
 	snprintf(create_query, sizeof(create_query), mysql_create_template, cfg.mysql_table);
 	snprintf(insert_query, sizeof(insert_query), mysql_insert_template, cfg.mysql_table);
 
@@ -49,7 +55,7 @@ void output_mysql_init()
 
 	cfg.mysql_conn = mysql_init(cfg.mysql_conn);
 	if (!cfg.mysql_conn)
-		log_msg(LOG_ERR, "Error allocating MySQL object");
+		log_msg(facility, "Error allocating MySQL object");
 	
 	if (cfg.mysql_config) {
 		if (mysql_options(cfg.mysql_conn, MYSQL_READ_DEFAULT_FILE, cfg.mysql_config)) {
@@ -59,25 +65,26 @@ void output_mysql_init()
 	}
 	
 	mysql_options(cfg.mysql_conn, MYSQL_READ_DEFAULT_GROUP, PACKAGE);
+	mysql_options(cfg.mysql_conn, MYSQL_OPT_RECONNECT, &reconnect);
 	if (!mysql_real_connect(cfg.mysql_conn, NULL, NULL, NULL, cfg.mysql_db, 0, NULL, 0))
-		log_msg(LOG_ERR, "Failed to connect to database: Error: %s", 
+		log_msg(facility, "Failed to connect to database: Error: %s", 
 	    			mysql_error(cfg.mysql_conn));
 
 	log_msg(LOG_DEBUG, "Using MySQL create query: %s",
 	                create_query);
 	if(mysql_query(cfg.mysql_conn, create_query))
-		log_msg(LOG_ERR, "Error creating table `addrwatch` in MySQL database: %s",
+		log_msg(facility, "Error creating table `addrwatch` in MySQL database: %s",
 				mysql_error(cfg.mysql_conn));
 
 	cfg.mysql_stmt = mysql_stmt_init(cfg.mysql_conn);
 	if (!cfg.mysql_stmt)
-		log_msg(LOG_ERR, "Error allocating MySQL statement object");
+		log_msg(facility, "Error allocating MySQL statement object");
 	
 	log_msg(LOG_DEBUG, "Using MySQL insert query: %s [%d]",
 	                insert_query, sizeof(insert_query));
 	rc = mysql_stmt_prepare(cfg.mysql_stmt, insert_query, strnlen(insert_query, sizeof(insert_query)));
 	if (rc)
-		log_msg(LOG_ERR, "Error preparing MySQL statement object: %s",
+		log_msg(facility, "Error preparing MySQL statement object: %s",
 				mysql_stmt_error(cfg.mysql_stmt));
 	
 	bzero(cfg.mysql_bind, sizeof(cfg.mysql_bind));
@@ -120,7 +127,7 @@ void output_mysql_init()
 	cfg.mysql_bind[6].length = &cfg.mysql_vars.origin_len;
 
 	if (mysql_stmt_bind_param(cfg.mysql_stmt, cfg.mysql_bind))
-		log_msg(LOG_ERR, "Error binding MySQL statement object: %s",
+		log_msg(facility, "Error binding MySQL statement object: %s",
 				mysql_stmt_error(cfg.mysql_stmt));
 #endif
 }
@@ -158,9 +165,18 @@ void output_mysql_save(struct pkt *p, char *mac_str, char *ip_str)
 	strcpy(cfg.mysql_vars.origin, pkt_origin_str[p->origin]);
 	cfg.mysql_vars.origin_len = strlen(pkt_origin_str[p->origin]);
 
-	if (mysql_stmt_execute(cfg.mysql_stmt))
-		log_msg(LOG_WARNING, "Error inserting data to MySQL database: %s",
-				mysql_stmt_error(cfg.mysql_stmt));
+	
+	if(mysql_ping(cfg.mysql_conn)) {
+		log_msg(LOG_WARNING, "Reconnect to mysql has failed");
+		output_mysql_reload();
+	} else if (mysql_stmt_execute(cfg.mysql_stmt)) {
+		unsigned int stmt_error = mysql_stmt_errno(cfg.mysql_stmt);
+		log_msg(LOG_WARNING, "Error inserting data to MySQL database: (%d) %s", stmt_error, mysql_stmt_error(cfg.mysql_stmt));
+		if ( stmt_error == 2013 ) { // stmt_error is 'Lost connection to MySQL server during query'
+			output_mysql_reload();
+			output_mysql_save(p, mac_str, ip_str);
+		}
+	}
 
 #endif
 }
